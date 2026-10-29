@@ -4,8 +4,6 @@ Versión PySide6 (Qt) con estética "liquid": bordes redondeados, transparencia,
 animaciones fluidas sencillas y personalización dinámica de temas.
 
 Dependencias: pip install PySide6 pillow  (+ las de text_from_image)
-
-MIT License - Adrián Cascudo Fernández
 """
 
 import faulthandler
@@ -3623,6 +3621,10 @@ class SnippetApp(QWidget):
         self._pressed = False
         self._rs_start = None
         self._theme_dlg_open = False
+        self._pending_copy_key = None
+        self._copy_timer = QTimer(self)
+        self._copy_timer.setSingleShot(True)
+        self._copy_timer.timeout.connect(self._flush_pending_copy)
 
         self.setCursor(Qt.PointingHandCursor)
         self._build_gui()
@@ -4657,7 +4659,7 @@ class SnippetApp(QWidget):
             preview = self._make_preview(self.snippets.get(key, ""))
             card = SnippetCard(
                 key, preview,
-                on_select=self._select_key, on_activate=self._edit_key,
+                on_select=self._click_key, on_activate=self._edit_key,
                 on_delete=self._delete_key,
                 selected=(key == self.selected_key),
             )
@@ -4673,10 +4675,10 @@ class SnippetApp(QWidget):
         filtered = [k for k in self.snippets if query in k.lower()]
         self._refresh_list(filtered)
 
-    def _select_key(self, key):
-        """Marca como seleccionado un snippet y copia su valor al portapapeles.
+    def _mark_selected(self, key):
+        """Resalta visualmente un snippet sin copiar nada al portapapeles.
         Args:
-            key: Título del snippet seleccionado.
+            key: Título del snippet a resaltar.
         Returns:
             None
         """
@@ -4685,17 +4687,57 @@ class SnippetApp(QWidget):
         self.selected_key = key
         if key in self.cards:
             self.cards[key].set_selected(True)
+
+    def _select_key(self, key):
+        """Marca como seleccionado un snippet y copia su valor al portapapeles.
+        Args:
+            key: Título del snippet seleccionado.
+        Returns:
+            None
+        """
+        self._mark_selected(key)
         QGuiApplication.clipboard().setText(self.snippets.get(key, ""))
         self._flash_status(f"Copiado «{key}»", "primary")
 
+    def _cancel_pending_copy(self):
+        """Anula una copia diferida que estaba esperando un posible doble clic.
+        Returns:
+            None
+        """
+        self._copy_timer.stop()
+        self._pending_copy_key = None
+
+    def _click_key(self, key):
+        """Gestiona un clic simple: resalta ya y copia al acabar el intervalo de doble clic.
+        Args:
+            key: Título del snippet pulsado.
+        Returns:
+            None
+        """
+        self._mark_selected(key)
+        self._pending_copy_key = key
+        self._copy_timer.start(max(150, QApplication.doubleClickInterval()))
+
+    def _flush_pending_copy(self):
+        """Copia el snippet pendiente si sigue existiendo cuando vence el temporizador.
+        Returns:
+            None
+        """
+        key, self._pending_copy_key = self._pending_copy_key, None
+        if key is not None and key in self.snippets:
+            self._select_key(key)
+
     def _edit_key(self, key):
-        """Selecciona el snippet indicado y abre su ventana de edición.
+        """Abre la ventana de edición del snippet sin copiarlo al portapapeles.
         Args:
             key: Título del snippet a editar.
         Returns:
             None
         """
-        self._select_key(key)
+        self._cancel_pending_copy()
+        if key not in self.snippets:
+            return
+        self._mark_selected(key)
         self._open_edit_window(key, self.snippets.get(key, ""))
 
     def _flash_status(self, text, color="primary", ms=1800):
@@ -4731,6 +4773,7 @@ class SnippetApp(QWidget):
         Returns:
             None
         """
+        self._cancel_pending_copy()
         self._ignore_focus = True
         try:
             if show_dialog(
