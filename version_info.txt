@@ -1,0 +1,28 @@
+# Metadatos que se incrustan en SnippetBaul.exe (Propiedades > Detalles).
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'Ownwork'),
+        StringStruct('FileDescription', 'Baúl de snippets - barra lateral con captura OCR'),
+        StringStruct('FileVersion', '1.0.0.0'),
+        StringStruct('InternalName', 'SnippetBaul'),
+        StringStruct('LegalCopyright', 'MIT License'),
+        StringStruct('OriginalFilename', 'SnippetBaul.exe'),
+        StringStruct('ProductName', 'Baúl de snippets'),
+        StringStruct('ProductVersion', '1.0.0.0')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

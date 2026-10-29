@@ -1,0 +1,7 @@
+PySide6-Essentials>=6.6
+Pillow>=10.0
+numpy>=1.26
+opencv-python-headless>=4.9
+pytesseract>=0.3.10
+mss>=9.0
+pyperclip>=1.8

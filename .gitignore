@@ -1,0 +1,16 @@
+# Datos del usuario y registros
+snippets.json
+snippets.json.bak
+snippets.json.tmp
+snippet_manager_errors.log*
+
+# Entornos y compilación
+.venv/
+__pycache__/
+build/
+dist/
+*.spec
+*.zip
+
+# Binarios de Tesseract copiados por build.bat
+vendor/
