@@ -3630,6 +3630,20 @@ class SnippetApp(QWidget):
         self._build_gui()
         self._apply_frame(self._p, self._vis, force=True)
 
+        self._hidden_mode = False
+        self._screen_timer = QTimer(self)
+        self._screen_timer.setSingleShot(True)
+        self._screen_timer.timeout.connect(self._refit_to_screens)
+        gapp = QGuiApplication.instance()
+        gapp.screenAdded.connect(self._on_screen_added)
+        gapp.screenRemoved.connect(self._on_screens_changed)
+        gapp.primaryScreenChanged.connect(self._on_screens_changed)
+        for scr in QGuiApplication.screens():
+            scr.geometryChanged.connect(self._on_screens_changed)
+        self._heal_timer = QTimer(self)
+        self._heal_timer.timeout.connect(self._heal)
+        self._heal_timer.start(4000)
+
     # --------------------------------------------------------------------------
     # Gestión de Temas en Tiempo Real
     # --------------------------------------------------------------------------
@@ -4561,13 +4575,105 @@ class SnippetApp(QWidget):
         else:
             self.toggle_panel()
 
+    def _on_screen_added(self, scr):
+        """Engancha el aviso de cambios del nuevo monitor y reajusta la barra.
+        Args:
+            scr: QScreen recién conectado.
+        Returns:
+            None
+        """
+        scr.geometryChanged.connect(self._on_screens_changed)
+        self._on_screens_changed()
+
+    def _on_screens_changed(self, *args):
+        """Programa un reajuste tras cambios de monitores, resolución o escala.
+        Returns:
+            None
+        """
+        log_error("DIAG cambio de pantallas: " + describe_screens())
+        self._screen_timer.start(400)
+
+    def _refit_to_screens(self):
+        """Recalcula monitores y reubica la barra dentro de una pantalla válida.
+        Returns:
+            None
+        """
+        try:
+            self.monitors = self._get_monitors()
+            self.current_mon = self._get_monitor_at(
+                self.current_x, self.current_y
+            )
+            self._update_monitor_metrics()
+            self.current_x = self._clamp(
+                self.current_x, self.mon_x,
+                self.mon_x + self.screen_w - self.collapsed_height,
+            )
+            self.current_y = self._clamp(
+                self.current_y, self.mon_y,
+                self.mon_y + self.screen_h - self.collapsed_height,
+            )
+            self._apply_frame(self._p, self._vis, force=True)
+        except Exception:
+            log_error(traceback.format_exc())
+
+    def _heal(self):
+        """Recupera la ventana si desaparece sin que el usuario la haya ocultado.
+        Returns:
+            None
+        """
+        if self._hidden_mode or self._selector is not None:
+            return
+        try:
+            if not self.isVisible():
+                log_error("DIAG ventana oculta sin motivo: se vuelve a mostrar")
+                self.show()
+                self._refit_to_screens()
+                return
+            geo = self.geometry()
+            if not any(
+                geo.intersects(scr.geometry())
+                for scr in QGuiApplication.screens()
+            ):
+                log_error("DIAG ventana fuera de pantalla: se reubica")
+                self._refit_to_screens()
+        except Exception:
+            log_error(traceback.format_exc())
+
+    def hideEvent(self, e):
+        """Registra con su origen cada vez que se oculta la ventana principal.
+        Args:
+            e: Evento QHideEvent.
+        Returns:
+            None
+        """
+        log_error(
+            "DIAG ocultar ventana principal (usuario=%s)\n%s"
+            % (self._hidden_mode, "".join(traceback.format_stack(limit=6)))
+        )
+        super().hideEvent(e)
+
+    def closeEvent(self, e):
+        """Registra con su origen cada cierre de la ventana principal.
+        Args:
+            e: Evento QCloseEvent.
+        Returns:
+            None
+        """
+        log_error(
+            "DIAG closeEvent ventana principal\n"
+            + "".join(traceback.format_stack(limit=6))
+        )
+        super().closeEvent(e)
+
     def reveal(self):
         """Muestra la ventana si estaba oculta y despliega el panel.
         Returns:
             None
         """
+        self._hidden_mode = False
         if not self.isVisible():
             self.show()
+        self._refit_to_screens()
         if not self.is_expanded and not self._animating:
             self.toggle_panel()
         self.raise_()
@@ -4579,16 +4685,27 @@ class SnippetApp(QWidget):
             None
         """
         if self.isVisible():
+            self._hidden_mode = True
             self.hide()
         else:
+            self._hidden_mode = False
             self.show()
+            self._refit_to_screens()
 
     def _close_app(self):
-        """Detiene animaciones activas y cierra la aplicación limpiamente.
+        """Detiene animaciones y temporizadores y cierra la aplicación limpiamente.
         Returns:
             None
         """
+        log_error("DIAG cierre solicitado (_close_app)")
         self.tween.cancel_all()
+        for name in ("_heal_timer", "_screen_timer", "_copy_timer"):
+            t = getattr(self, name, None)
+            if t is not None:
+                t.stop()
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.hide()
         QApplication.quit()
 
     # --------------------------------------------------------------------------
@@ -4960,6 +5077,21 @@ class SnippetApp(QWidget):
         )
 
 
+def describe_screens():
+    """Resume los monitores detectados (geometría y escala) para el registro.
+    Returns:
+        Cadena de una línea.
+    """
+    parts = []
+    for scr in QGuiApplication.screens():
+        g = scr.geometry()
+        parts.append(
+            f"{scr.name()} {g.x()},{g.y()} {g.width()}x{g.height()} "
+            f"@{scr.devicePixelRatio():.2f}"
+        )
+    return " | ".join(parts) or "sin pantallas"
+
+
 def make_app_pixmap(size):
     """Dibuja el icono de la aplicación (portapapeles sobre cuadrado redondeado).
     Args:
@@ -5009,19 +5141,29 @@ def _instance_key():
 
 
 def notify_running_instance():
-    """Avisa a una instancia ya abierta para que se muestre.
+    """Avisa a una instancia ya abierta y comprueba que realmente responde.
     Returns:
-        True si había otra instancia (esta debe cerrarse).
+        True solo si otra instancia respondió "ok" (esta debe cerrarse).
+        Si existe pero no responde (bloqueada o sin ventana), devuelve False
+        para que esta copia arranque con normalidad.
     """
     sock = QLocalSocket()
     sock.connectToServer(_instance_key())
-    if sock.waitForConnected(300):
-        sock.write(b"show")
-        sock.flush()
-        sock.waitForBytesWritten(300)
-        sock.disconnectFromServer()
-        return True
-    return False
+    if not sock.waitForConnected(500):
+        return False
+    sock.write(b"show")
+    sock.flush()
+    sock.waitForBytesWritten(500)
+    answered = False
+    if sock.waitForReadyRead(2500):
+        answered = bytes(sock.readAll()).startswith(b"ok")
+    sock.abort()
+    if not answered:
+        log_error(
+            "Había una instancia previa que no respondió (posible proceso "
+            "bloqueado); se inicia una nueva."
+        )
+    return answered
 
 
 def start_instance_server(win):
@@ -5038,11 +5180,23 @@ def start_instance_server(win):
                   f"{server.errorString()}")
         return None
 
+    def _answer(sock):
+        sock.readAll()
+        try:
+            win.reveal()
+            sock.write(b"ok")
+        except Exception:
+            log_error(traceback.format_exc())
+            sock.write(b"err")
+        sock.flush()
+
     def _on_connection():
-        sock = server.nextPendingConnection()
-        if sock is not None:
+        while server.hasPendingConnections():
+            sock = server.nextPendingConnection()
+            if sock is None:
+                break
+            sock.readyRead.connect(lambda s=sock: _answer(s))
             sock.disconnected.connect(sock.deleteLater)
-        win.reveal()
 
     server.newConnection.connect(_on_connection)
     return server
@@ -5129,15 +5283,46 @@ def main():
     app = QApplication(sys.argv)
     if notify_running_instance():
         return
+    log_error(
+        f"DIAG inicio pid={os.getpid()} args={sys.argv[1:]} "
+        f"frozen={_is_frozen()} datos={DATA_DIR} "
+        f"bandeja={QSystemTrayIcon.isSystemTrayAvailable()} "
+        f"pantallas: {describe_screens()}"
+    )
+    app.aboutToQuit.connect(lambda: log_error("DIAG aboutToQuit"))
     app.setQuitOnLastWindowClosed(False)
     app.setFont(ui_font(9))
     app.setWindowIcon(make_app_icon())
     win = SnippetApp()
     win._instance_server = start_instance_server(win)
     win._tray = build_tray(win)
-    if "--hidden" not in sys.argv[1:] or win._tray is None:
+    if "--hidden" in sys.argv[1:] and win._tray is not None:
+        win._hidden_mode = True
+    else:
         win.show()
-    sys.exit(app.exec())
+
+    if win._tray is None:
+        # Al iniciar sesión, el explorador puede no tener aún bandeja: reintenta.
+        attempts = {"n": 0}
+        retry = QTimer(win)
+
+        def _retry_tray():
+            attempts["n"] += 1
+            if win._tray is None and QSystemTrayIcon.isSystemTrayAvailable():
+                win._tray = build_tray(win)
+            if win._tray is not None or attempts["n"] >= 40:
+                retry.stop()
+
+        retry.timeout.connect(_retry_tray)
+        retry.start(3000)
+
+    code = app.exec()
+    log_error(f"DIAG fin del bucle de eventos, código {code}")
+    server = getattr(win, "_instance_server", None)
+    if server is not None:
+        server.close()
+    # Salida inmediata: evita procesos huérfanos por el cierre de Qt/hilos.
+    os._exit(code)
 
 
 if __name__ == "__main__":
